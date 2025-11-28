@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tomato Clock - Pomodoro Timer</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --tomato-red: #ef4444; /* Tailwind red-500 */
+            --dark-bg: #1f2937; /* Tailwind gray-800 */
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--dark-bg);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .timer-card {
+            background-color: #374151; /* Tailwind gray-700 */
+            border: 2px solid var(--tomato-red);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+        }
+        .mode-button.active {
+            background-color: var(--tomato-red);
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+            font-weight: 700;
+        }
+        /* Custom styles for the circular progress bar (SVG stroke) */
+        #progress-circle {
+            transition: stroke-dashoffset 1s linear;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="timer-card w-full max-w-lg mx-auto p-6 md:p-10 rounded-3xl text-white text-center transition duration-500">
+        
+        <!-- Mode Selector Buttons -->
+        <div class="flex justify-center space-x-2 p-1 bg-gray-600 rounded-xl mb-8 shadow-inner">
+            <button id="pomodoro-btn" class="mode-button px-4 py-2 rounded-xl text-sm md:text-base active transition-all duration-200" data-mode="pomodoro">Pomodoro</button>
+            <button id="short-break-btn" class="mode-button px-4 py-2 rounded-xl text-sm md:text-base transition-all duration-200" data-mode="shortBreak">Short Break</button>
+            <button id="long-break-btn" class="mode-button px-4 py-2 rounded-xl text-sm md:text-base transition-all duration-200" data-mode="longBreak">Long Break</button>
+        </div>
+
+        <!-- Timer Display and Progress Circle -->
+        <div class="relative w-64 h-64 mx-auto mb-8">
+            <!-- SVG Circle for Progress -->
+            <svg class="w-full h-full" viewBox="0 0 100 100">
+                <!-- Background track -->
+                <circle cx="50" cy="50" r="45" fill="none" stroke="#4b5563" stroke-width="5"></circle>
+                <!-- Foreground progress bar -->
+                <circle id="progress-circle" cx="50" cy="50" r="45" fill="none" stroke="var(--tomato-red)" stroke-width="5" stroke-linecap="round" stroke-dasharray="282.74" stroke-dashoffset="282.74"></circle>
+            </svg>
+            <!-- Time Display -->
+            <div class="absolute inset-0 flex flex-col justify-center items-center">
+                <div id="time-display" class="text-7xl font-extrabold select-none">25:00</div>
+                <div id="status-message" class="text-gray-300 font-semibold mt-2">Time to focus!</div>
+            </div>
+        </div>
+
+        <!-- Control Buttons -->
+        <div class="flex justify-center space-x-4">
+            <button id="start-pause-btn" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition duration-150 active:scale-95" onclick="toggleTimer()">
+                Start
+            </button>
+            <button id="reset-btn" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition duration-150 active:scale-95" onclick="resetTimer()">
+                Reset
+            </button>
+        </div>
+        
+        <!-- Pomodoro Counter -->
+        <div class="mt-8 text-gray-400 text-sm">
+            Completed Pomodoros: <span id="pomodoro-count" class="font-bold text-lg text-tomato-red">0</span>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Constants and State ---
+        const TIME_MODES = {
+            pomodoro: 1500, // 25 minutes
+            shortBreak: 300, // 5 minutes
+            longBreak: 900   // 15 minutes
+        };
+
+        const STATE = {
+            currentMode: 'pomodoro',
+            timeLeft: TIME_MODES.pomodoro,
+            isRunning: false,
+            intervalId: null,
+            totalTime: TIME_MODES.pomodoro,
+            pomodoroCount: 0
+        };
+
+        // --- DOM Elements ---
+        const timeDisplay = document.getElementById('time-display');
+        const startPauseBtn = document.getElementById('start-pause-btn');
+        const statusMessage = document.getElementById('status-message');
+        const pomodoroCountSpan = document.getElementById('pomodoro-count');
+        const progressCircle = document.getElementById('progress-circle');
+        const modeButtons = document.querySelectorAll('.mode-button');
+        const CIRCUMFERENCE = 2 * Math.PI * 45; // 2 * pi * r (r=45 from SVG)
+
+        // --- Utility Functions ---
+
+        /**
+         * Formats time in seconds to MM:SS string.
+         * @param {number} seconds - The time remaining in seconds.
+         * @returns {string} Formatted time string.
+         */
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            const paddedMinutes = String(minutes).padStart(2, '0');
+            const paddedSeconds = String(remainingSeconds).padStart(2, '0');
+            return `${paddedMinutes}:${paddedSeconds}`;
+        }
+
+        /**
+         * Updates the circular progress bar based on time remaining.
+         */
+        function updateProgressBar() {
+            const percentage = STATE.timeLeft / STATE.totalTime;
+            const offset = CIRCUMFERENCE * percentage;
+            progressCircle.style.strokeDashoffset = offset;
+        }
+
+        /**
+         * Plays a short, distinct sound using the Web Audio API.
+         */
+        function playAlarmSound() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+            
+            const context = new AudioContext();
+            const oscillator = context.createOscillator();
+            const gainNode = context.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(context.destination);
+
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(440, context.currentTime); // A4 note
+            gainNode.gain.setValueAtTime(0, context.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.5, context.currentTime + 0.05);
+            gainNode.gain.linearRampToValueAtTime(0, context.currentTime + 0.5);
+
+            oscillator.start(context.currentTime);
+            oscillator.stop(context.currentTime + 0.5);
+        }
+
+        // --- Core Timer Logic ---
+
+        /**
+         * Renders the current state to the DOM.
+         */
+        function render() {
+            timeDisplay.textContent = formatTime(STATE.timeLeft);
+            document.title = `(${formatTime(STATE.timeLeft)}) - Tomato Clock`;
+            startPauseBtn.textContent = STATE.isRunning ? 'Pause' : 'Start';
+            startPauseBtn.classList.toggle('bg-green-500', !STATE.isRunning);
+            startPauseBtn.classList.toggle('bg-yellow-500', STATE.isRunning);
+            startPauseBtn.classList.toggle('hover:bg-green-600', !STATE.isRunning);
+            startPauseBtn.classList.toggle('hover:bg-yellow-600', STATE.isRunning);
+            pomodoroCountSpan.textContent = STATE.pomodoroCount;
+            updateProgressBar();
+        }
+
+        /**
+         * Handles the countdown logic executed every second.
+         */
+        function tick() {
+            if (STATE.timeLeft > 0) {
+                STATE.timeLeft--;
+            } else {
+                // Timer finished
+                clearInterval(STATE.intervalId);
+                STATE.isRunning = false;
+                playAlarmSound();
+                handleSessionEnd();
+            }
+            render();
+        }
+
+        /**
+         * Starts or pauses the timer.
+         */
+        function toggleTimer() {
+            if (STATE.isRunning) {
+                // Pause
+                clearInterval(STATE.intervalId);
+                STATE.isRunning = false;
+                statusMessage.textContent = 'Paused. Take a breath.';
+            } else {
+                // Start
+                STATE.isRunning = true;
+                STATE.intervalId = setInterval(tick, 1000);
+                statusMessage.textContent = STATE.currentMode === 'pomodoro' ? 'Time to focus!' : 'Break time!';
+            }
+            render();
+        }
+
+        /**
+         * Resets the timer to the current mode's default time.
+         */
+        function resetTimer() {
+            clearInterval(STATE.intervalId);
+            STATE.isRunning = false;
+            
+            STATE.totalTime = TIME_MODES[STATE.currentMode];
+            STATE.timeLeft = STATE.totalTime;
+
+            statusMessage.textContent = STATE.currentMode === 'pomodoro' ? 'Ready to go!' : 'Ready for a break.';
+            render();
+        }
+
+        /**
+         * Switches the active time mode.
+         * @param {string} mode - 'pomodoro', 'shortBreak', or 'longBreak'.
+         */
+        function switchMode(mode) {
+            if (STATE.currentMode === mode) return;
+
+            // Update button active state
+            modeButtons.forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
+
+            STATE.currentMode = mode;
+            resetTimer(); // Reset timer to new mode's duration
+        }
+
+        /**
+         * Logic to execute when a session (Pomodoro or Break) ends.
+         */
+        function handleSessionEnd() {
+            let nextMode;
+            if (STATE.currentMode === 'pomodoro') {
+                STATE.pomodoroCount++;
+                const isLongBreak = STATE.pomodoroCount % 4 === 0;
+                nextMode = isLongBreak ? 'longBreak' : 'shortBreak';
+                statusMessage.textContent = isLongBreak ? 'Long Break Time! You earned it.' : 'Short Break Time! Stretch your legs.';
+            } else {
+                // Break ended, switch back to Pomodoro
+                nextMode = 'pomodoro';
+                statusMessage.textContent = 'Break finished! Back to work.';
+            }
+            
+            // Automatically switch to the next mode and start timing down for user convenience
+            // switchMode(nextMode); // Don't auto-start, let the user click
+            
+            // Just switch the UI to the next mode's settings, keep timer paused
+            modeButtons.forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`[data-mode="${nextMode}"]`).classList.add('active');
+            STATE.currentMode = nextMode;
+            resetTimer();
+        }
+
+        // --- Initialization ---
+
+        // Event listeners for mode buttons
+        modeButtons.forEach(button => {
+            button.addEventListener('click', (e) => {
+                const mode = e.target.dataset.mode;
+                switchMode(mode);
+            });
+        });
+
+        // Initialize the app view
+        resetTimer(); 
+
+    </script>
+</body>
+</html>
